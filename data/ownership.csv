@@ -1,0 +1,8 @@
+Parent,Subsidiary,Ownership,Country,Sector
+Bollore,Vivendi,29,France,Media
+Vivendi,Havas,100,France,Advertising
+Vivendi,Canal+,100,France,Media
+LVMH,Dior,41,France,Luxury
+Dior,Sephora,100,France,Retail
+Dior,Christian Dior Couture,100,France,Luxury
+AirLiquide,Airgas,100,USA,Industrial Gas

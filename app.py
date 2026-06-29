@@ -2,6 +2,90 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
+
+def reconcile_metrics(
+    metrics,
+    table_metrics
+):
+
+    balance_metrics = [
+        "assets",
+        "equity",
+        "liabilities"
+    ]
+
+    for metric_name, table_values in table_metrics.items():
+
+        if not table_values:
+            continue
+
+        if (
+            metric_name not in metrics
+            or not metrics.get(metric_name)
+        ):
+            metrics[metric_name] = table_values
+            continue
+
+        text_values = metrics.get(
+            metric_name,
+            {}
+        )
+
+        if not isinstance(text_values, dict):
+            continue
+
+        merged = dict(text_values)
+
+        for year, table_value in table_values.items():
+
+            text_value = text_values.get(year)
+
+            if text_value in [
+                None,
+                0,
+                "",
+                "N/A"
+            ]:
+                merged[year] = table_value
+                continue
+
+            try:
+
+                text_value = float(text_value)
+                table_value = float(table_value)
+
+                ratio = (
+                    max(
+                        abs(text_value),
+                        abs(table_value)
+                    )
+                    /
+                    max(
+                        min(
+                            abs(text_value),
+                            abs(table_value)
+                        ),
+                        1
+                    )
+                )
+
+                if metric_name in balance_metrics:
+
+                    if ratio < 5:
+                        merged[year] = table_value
+                    else:
+                        merged[year] = text_value
+
+                else:
+                    merged[year] = table_value
+
+            except Exception:
+                merged[year] = text_value
+
+        metrics[metric_name] = merged
+
+    return metrics
+
 # ============================================================
 # Configuration
 # ============================================================
@@ -232,40 +316,58 @@ elif page == "Document Intelligence":
                 FinancialExtractor
             )
 
+            from src.ai_auditor.financial_reader import (
+                FinancialReader
+            )
+
+            from src.ai_auditor.financial_validator import (
+                FinancialValidator
+            )
+
+            from src.ai_auditor.confidence_engine import (
+                ConfidenceEngine
+            )
+
+            from src.ai_auditor.table_financial_extractor import (
+                TableFinancialExtractor
+            )
+
             text = parser.extract_text()
 
             import re
 
             match = re.search(
-            r"Consolidated Financial Statements\s+(\d+)",
-            text,
-            re.IGNORECASE
+                r"Consolidated Financial Statements\s+(\d+)",
+                text,
+                re.IGNORECASE
             )
 
             if match:
 
-            page_ref = int(match.group(1))
+                page_ref = int(match.group(1))
 
-            start_page = max(
-            page_ref - 5,
-            0
-            )
+                start_page = max(
+                    page_ref - 5,
+                    0
+                )
 
-            text = parser.extract_first_pages_text(
-            pages=437
-            )
+                text = parser.extract_page_range(
+                start_page=max(page_ref - 1, 0),
+                end_page=page_ref + 10
+                )
 
             else:
 
-            text = parser.extract_first_pages_text(
-             pages=437
-            )
+                text = parser.extract_first_pages_text(
+                    pages=30
+                )
 
             lines = text.split("\n")
             financial_start = 0
 
             for i, line in enumerate(lines):
                 lower_line = line.lower()
+
                 if (
                     "financial statements" in lower_line
                     or "consolidated financial statements" in lower_line
@@ -276,6 +378,7 @@ elif page == "Document Intelligence":
                     break
 
             text = "\n".join(lines[financial_start:])
+
 
             st.subheader(
                 "Financial Text Sample"
@@ -293,11 +396,284 @@ elif page == "Document Intelligence":
 
             metrics = extractor.extract_metrics()
 
+            tables = parser.extract_tables()
+
+            table_extractor = TableFinancialExtractor()
+
+            table_metrics = table_extractor.extract(
+                tables
+            )
+
+            st.subheader("Raw Table Metrics Debug")
+            st.json(table_metrics)
+
+            st.subheader(
+                "Table Extraction"
+            )
+
+            st.json(
+                table_metrics
+            )
+
+            metrics = reconcile_metrics(
+                metrics,
+                table_metrics
+            )
+
             st.subheader(
                 "Extracted Financial Metrics"
             )
 
+            reader = FinancialReader()
+
+            summary = reader.read(
+                metrics
+            )
+
+            validator = FinancialValidator()
+
+            validation = validator.validate(
+                metrics
+            )
+
+            # Secondary reconciliation using validator result
+            balance_difference = validation.get(
+                "balance_sheet_difference"
+            )
+
+            if (
+                balance_difference is not None
+                and balance_difference > 1000
+            ):
+
+                for year in list(metrics.get("assets", {}).keys()):
+
+                    try:
+                        ta = table_metrics.get("assets", {}).get(year)
+                        te = table_metrics.get("equity", {}).get(year)
+                        tl = table_metrics.get("liabilities", {}).get(year)
+
+                        if (
+                            ta is not None
+                            and te is not None
+                            and tl is not None
+                        ):
+                            # Only replace if table values themselves balance
+                            candidate_diff = abs(float(ta) - (float(te) + float(tl)))
+
+                            if candidate_diff < 100:
+                                metrics["assets"][year] = float(ta)
+                                metrics["equity"][year] = float(te)
+                                metrics["liabilities"][year] = float(tl)
+
+                    except Exception:
+                        pass
+
+                validation = validator.validate(metrics)
+
+            # Show metrics AFTER reconciliation
             st.json(metrics)
+
+            # Debug balance-sheet values
+            for year in metrics.get("assets", {}):
+                try:
+                    a = metrics.get("assets", {}).get(year)
+                    e = metrics.get("equity", {}).get(year)
+                    l = metrics.get("liabilities", {}).get(year)
+
+                    st.caption(
+                        f"DEBUG {year}: Assets={a} | Equity={e} | Liabilities={l} | Equity+Liabilities={float(e)+float(l) if e is not None and l is not None else 'N/A'}"
+                    )
+                except Exception:
+                    pass
+
+            confidence_engine = ConfidenceEngine()
+
+            confidence = confidence_engine.calculate(
+                metrics
+            )
+
+            def latest_metric_value(metric_dict):
+
+                if not isinstance(metric_dict, dict):
+                    return None
+
+                try:
+                    latest_year = max(metric_dict.keys())
+                    return latest_year, metric_dict[latest_year]
+                except Exception:
+                    return None
+
+            st.subheader(
+                "AI Financial Reader"
+            )
+
+            revenue_data = latest_metric_value(metrics.get("revenue"))
+            assets_data = latest_metric_value(metrics.get("assets"))
+            equity_data = latest_metric_value(metrics.get("equity"))
+            liabilities_data = latest_metric_value(metrics.get("liabilities"))
+
+            if revenue_data:
+                st.markdown(
+                    f"**Revenue ({revenue_data[0]})**: {revenue_data[1]:,.1f}"
+                )
+
+            if assets_data:
+                st.markdown(
+                    f"**Assets ({assets_data[0]})**: {assets_data[1]:,.1f}"
+                )
+
+            if equity_data:
+                st.markdown(
+                    f"**Equity ({equity_data[0]})**: {equity_data[1]:,.1f}"
+                )
+
+            if liabilities_data:
+                st.markdown(
+                    f"**Liabilities ({liabilities_data[0]})**: {liabilities_data[1]:,.1f}"
+                )
+
+            # Additional reconciliation feedback
+            if validation.get("valid"):
+                st.success("Financial metrics reconciled successfully")
+            else:
+                st.warning("Metrics extracted but balance sheet is still inconsistent. Review equity/liability mapping.")
+
+            st.subheader(
+                "Validation Report"
+            )
+
+            st.json(
+                validation
+            )
+
+            st.subheader(
+                "Balance Sheet Validation"
+            )
+
+            balance_difference = validation.get(
+                "balance_sheet_difference"
+            )
+
+            if balance_difference is not None:
+
+                if balance_difference < 100:
+
+                    st.success(
+                        f"Balance Sheet Validated ✅ (difference: {balance_difference:.2f})"
+                    )
+
+                else:
+
+                    st.error(
+                        f"Balance Sheet Mismatch ❌ (difference: {balance_difference:.2f})"
+                    )
+
+            else:
+
+                st.info(
+                    "Insufficient data to validate Assets = Equity + Liabilities"
+                )
+
+            st.subheader(
+                "Confidence Scores"
+            )
+
+            st.json(
+                confidence
+            )
+
+            clean_metrics = {}
+
+            for key, value in metrics.items():
+
+                if value:
+
+                    clean_metrics[key] = value
+
+            if clean_metrics:
+
+                st.subheader(
+                    "Financial Dashboard"
+                )
+
+
+                m1, m2, m3, m4 = st.columns(4)
+
+                revenue_data = latest_metric_value(metrics.get("revenue"))
+                assets_data = latest_metric_value(metrics.get("assets"))
+                equity_data = latest_metric_value(metrics.get("equity"))
+
+                m1.metric(
+                    "Revenue",
+                    f"{revenue_data[1]:,.1f}" if revenue_data else "N/A"
+                )
+
+                m2.metric(
+                    "Assets",
+                    f"{assets_data[1]:,.1f}" if assets_data else "N/A"
+                )
+
+                m3.metric(
+                    "Equity",
+                    f"{equity_data[1]:,.1f}" if equity_data else "N/A"
+                )
+
+                liabilities_data = latest_metric_value(metrics.get("liabilities"))
+
+                m4.metric(
+                    "Liabilities",
+                    f"{liabilities_data[1]:,.1f}" if liabilities_data else "N/A"
+                )
+
+                if assets_data and equity_data and assets_data[1] > 0:
+
+                    st.subheader(
+                        "Financial Ratios"
+                    )
+
+                    equity_ratio = round(
+                        (equity_data[1] / assets_data[1]) * 100,
+                        2
+                    )
+
+                    liabilities_data = latest_metric_value(metrics.get("liabilities"))
+
+                    debt_ratio = None
+
+                    if liabilities_data:
+                        debt_ratio = round(
+                            liabilities_data[1] / assets_data[1] * 100,
+                            2
+                        )
+
+                    # Prevent impossible ratios caused by bad mappings
+                    if equity_ratio > 100:
+                        st.error(
+                            "Detected balance-sheet inconsistency: Equity exceeds Assets. Table mapping should be reviewed."
+                        )
+
+                    r1, r2, r3, r4 = st.columns(4)
+
+                    r1.metric(
+                        "Assets",
+                        f"{assets_data[1]:,.1f}"
+                    )
+
+                    r2.metric(
+                        "Equity Ratio %",
+                        equity_ratio
+                    )
+
+                    r3.metric(
+                        "Debt Ratio %",
+                        debt_ratio if debt_ratio is not None else "N/A"
+                    )
+
+                    r4.metric(
+                        "Balance Sheet Check",
+                        "PASS" if validation.get("valid") else "FAIL"
+                    )
 
             non_empty_metrics = {
                 k: v
@@ -334,54 +710,53 @@ elif page == "Document Intelligence":
                 "Financial Statement Detection"
             )
 
+            import re
+
             statement_pages = {}
 
-            lines = text.split("\n")
+            patterns = {
+                "Consolidated Financial Statements":
+                    r"Consolidated Financial Statements\s+(\d+)",
 
-            for line in lines:
+                "Income Statement":
+                    r"Income Statement\s+(\d+)",
 
-                lower_line = line.lower()
+                "Balance Sheet":
+                    r"Balance Sheet\s+(\d+)",
 
-                if (
-                    "consolidated financial statements" in lower_line
-                    and any(char.isdigit() for char in line)
-                ):
-                    statement_pages[
-                        "Consolidated Financial Statements"
-                    ] = line
+                "Cash Flow Statement":
+                    r"Cash Flow.*?(\d+)"
+            }
 
-                if (
-                    "income statement" in lower_line
-                    and any(char.isdigit() for char in line)
-                ):
-                    statement_pages[
-                        "Income Statement"
-                    ] = line
+            for name, pattern in patterns.items():
 
-                if (
-                    "balance sheet" in lower_line
-                    and any(char.isdigit() for char in line)
-                ):
-                    statement_pages[
-                        "Balance Sheet"
-                    ] = line
+                match = re.search(
+                    pattern,
+                    parser.extract_text(),
+                    re.IGNORECASE
+                )
 
-                if (
-                    "cash flow" in lower_line
-                    and any(char.isdigit() for char in line)
-                ):
-                    statement_pages[
-                        "Cash Flow Statement"
-                    ] = line
+                if match:
+
+                    statement_pages[name] = int(
+                        match.group(1)
+                    )
 
             if statement_pages:
-                st.json(statement_pages)
+
+                st.success(
+                    "Financial statement pages detected"
+                )
+
+                st.json(
+                    statement_pages
+                )
 
             # ==========================
             # PDF Intelligence Summary
             # ==========================
 
-            tables = parser.extract_tables()
+            # Reuse tables already extracted above
 
             valid_tables = []
 
@@ -436,7 +811,9 @@ elif page == "Document Intelligence":
                 try:
                     import pandas as pd
 
-                    financial_table = None
+                    # New scoring-based selection logic
+                    best_score = -1
+                    best_table = None
 
                     for table in valid_tables:
 
@@ -445,28 +822,61 @@ elif page == "Document Intelligence":
                             for row in table
                             for cell in row
                             if cell
-                        )
+                        ).lower()
 
-                        score = sum(
-                            keyword in flat_text.lower()
-                            for keyword in [
-                                "revenue",
-                                "sales",
-                                "assets",
-                                "equity",
-                                "income",
-                                "cash flow",
-                                "profit",
-                                "liabilities"
-                            ]
-                        )
+                        score = 0
 
-                        if score >= 2:
-                            financial_table = table
-                            break
+                        financial_keywords = [
+                            "assets",
+                            "liabilities",
+                            "equity",
+                            "shareholders",
+                            "current assets",
+                            "non-current assets",
+                            "total assets",
+                            "total liabilities",
+                            "revenue",
+                            "income",
+                            "cash flow",
+                            "profit",
+                            "borrowings",
+                            "trade receivables",
+                            "trade payables"
+                        ]
+
+                        for keyword in financial_keywords:
+                            if keyword in flat_text:
+                                score += 1
+
+                        if score > best_score:
+                            best_score = score
+                            best_table = table
+
+                    financial_table = best_table
+
+                    st.metric(
+                        "Selected Table Score",
+                        best_score
+                    )
+
+                    if best_score < 3:
+                        st.error(
+                            "Low confidence table selection."
+                        )
+                    elif best_score < 7:
+                        st.warning(
+                            "Medium confidence table selection."
+                        )
+                    else:
+                        st.success(
+                            "High confidence financial table."
+                        )
 
                     if financial_table is None:
-                        financial_table = valid_tables[0]
+                        st.warning(
+                            "No reliable financial table identified."
+                        )
+
                     st.caption(
                         f"Financial table selected from {len(valid_tables)} candidate tables"
                     )

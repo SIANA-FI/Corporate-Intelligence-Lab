@@ -28,3 +28,11 @@ uploads/*.csv
 uploads/*.docx
 reports/*.xlsx
 reports/*.docx
+
+# Local backups / archives / audit dumps (not source)
+Corporate-Intelligence-Lab-Full/
+Corporate-Intelligence-Lab-Full */
+Corporate-Intelligence-Lab-Full.zip
+*.zip
+full_code_audit.txt
+project_tree.txt

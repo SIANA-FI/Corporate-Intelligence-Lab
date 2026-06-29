@@ -41,6 +41,30 @@ class PDFParser:
 
         return tables
 
+    def extract_tables_from_pages(
+        self,
+        start_page,
+        end_page
+    ):
+
+        tables = []
+
+        with pdfplumber.open(self.file_path) as pdf:
+
+            total_pages = len(pdf.pages)
+
+            start_page = max(0, start_page)
+            end_page = min(total_pages, end_page)
+
+            for page in pdf.pages[start_page:end_page]:
+
+                extracted = page.extract_tables()
+
+                if extracted:
+                    tables.extend(extracted)
+
+        return tables
+
     def financial_keywords(self):
 
         text = self.extract_text().lower()
@@ -70,6 +94,25 @@ class PDFParser:
         ) as pdf:
 
             for page in pdf.pages[:pages]:
+
+                page_text = page.extract_text()
+
+                if page_text:
+                    text += page_text + "\n"
+
+        return text
+
+    def extract_page_range(
+        self,
+        start_page,
+        end_page
+    ):
+
+        text = ""
+
+        with pdfplumber.open(self.file_path) as pdf:
+
+            for page in pdf.pages[start_page:end_page]:
 
                 page_text = page.extract_text()
 

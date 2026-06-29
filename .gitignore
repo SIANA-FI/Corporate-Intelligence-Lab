@@ -1,55 +1,38 @@
-# Sidebar selectbox navigation list (assuming it looks like this):
-page = st.sidebar.selectbox(
-    "Select a page:",
-    [
-        "Home",
-        "Company Overview",
-        "Risk Scanner",
-        "Analyst Report",
-        "Other Page"
-    ]
-)
+__pycache__/
+*.py[cod]
+*.so
 
-# ============================================================
-# Analyst Report
-# ============================================================
+.venv/
+venv/
+env/
+ENV/
 
-elif page == "Analyst Report":
+.vscode/
+.ipynb_checkpoints/
 
-    st.title("📄 Analyst Report")
+outputs/*.xlsx
+outputs/*.png
 
-    for _, row in score_df.sort_values(
-        by="Corporate Score",
-        ascending=False
-    ).iterrows():
+.DS_Store
 
-        st.markdown("---")
+.streamlit/secrets.toml
 
-        st.subheader(row["Company"])
+__pycache__/
+.pytest_cache/
+uploads/*.xlsx
+uploads/*.pdf
+reports/*.pdf
 
-        st.write(f"ROE : {row['ROE']}%")
-        st.write(f"Net Margin : {row['Net Margin']}%")
-        st.write(f"Debt/Equity : {row['Debt/Equity']}")
-        st.write(f"CAGR Revenue : {row['CAGR Revenue']}%")
+*.pyc
+uploads/*.csv
+uploads/*.docx
+reports/*.xlsx
+reports/*.docx
 
-        st.write("Assessment:")
-
-        if row["ROE"] > 20:
-            st.success("Excellent profitability")
-        else:
-            st.info("Good profitability")
-
-        if row["CAGR Revenue"] > 8:
-            st.success("Strong growth profile")
-        else:
-            st.info("Stable growth profile")
-
-        if row["Debt/Equity"] < 0.7:
-            st.success("Low financial risk")
-        else:
-            st.warning("Moderate financial risk")
-
-        st.metric(
-            "Corporate Score",
-            round(row["Corporate Score"], 2)
-        )
+# Local backups / archives / audit dumps (not source)
+Corporate-Intelligence-Lab-Full/
+Corporate-Intelligence-Lab-Full */
+Corporate-Intelligence-Lab-Full.zip
+*.zip
+full_code_audit.txt
+project_tree.txt

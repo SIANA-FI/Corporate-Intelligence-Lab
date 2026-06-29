@@ -1,5 +1,90 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
+
+
+def reconcile_metrics(
+    metrics,
+    table_metrics
+):
+
+    balance_metrics = [
+        "assets",
+        "equity",
+        "liabilities"
+    ]
+
+    for metric_name, table_values in table_metrics.items():
+
+        if not table_values:
+            continue
+
+        if (
+            metric_name not in metrics
+            or not metrics.get(metric_name)
+        ):
+            metrics[metric_name] = table_values
+            continue
+
+        text_values = metrics.get(
+            metric_name,
+            {}
+        )
+
+        if not isinstance(text_values, dict):
+            continue
+
+        merged = dict(text_values)
+
+        for year, table_value in table_values.items():
+
+            text_value = text_values.get(year)
+
+            if text_value in [
+                None,
+                0,
+                "",
+                "N/A"
+            ]:
+                merged[year] = table_value
+                continue
+
+            try:
+
+                text_value = float(text_value)
+                table_value = float(table_value)
+
+                ratio = (
+                    max(
+                        abs(text_value),
+                        abs(table_value)
+                    )
+                    /
+                    max(
+                        min(
+                            abs(text_value),
+                            abs(table_value)
+                        ),
+                        1
+                    )
+                )
+
+                if metric_name in balance_metrics:
+
+                    if ratio < 5:
+                        merged[year] = table_value
+                    else:
+                        merged[year] = text_value
+
+                else:
+                    merged[year] = table_value
+
+            except Exception:
+                merged[year] = text_value
+
+        metrics[metric_name] = merged
+
+    return metrics
 
 # ============================================================
 # Configuration
@@ -29,14 +114,19 @@ ownership_df = pd.read_csv(
 
 st.sidebar.title("Corporate Intelligence Lab")
 
-page = st.sidebar.selectbox(
+page = st.sidebar.radio(
     "Navigation",
     [
         "Financial Analysis",
+        "Document Intelligence",
+        "Company Profile",
         "Ownership Analysis",
         "Ownership Graph",
         "UBO Search",
-        "Risk Scanner"
+        "Risk Engine",
+        "Risk Scanner",
+        "Analyst Conclusion",
+        "Analyst Report"
     ]
 )
 
@@ -65,29 +155,809 @@ if page == "Financial Analysis":
         round(score_df["Corporate Score"].mean(), 2)
     )
 
-    st.dataframe(
-        score_df,
-        width="stretch"
+    st.markdown("---")
+
+    st.header("🎯 Executive Summary")
+
+    best_company = score_df.loc[
+        score_df["Corporate Score"].idxmax()
+    ]
+
+    best_growth = score_df.loc[
+        score_df["CAGR Revenue"].idxmax()
+    ]
+
+    lowest_risk = score_df.loc[
+        score_df["Debt/Equity"].idxmin()
+    ]
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        st.success(
+            f"🏆 MARKET LEADER\n\n{best_company['Company']}\n\n{best_company['Corporate Score']:.2f}"
+        )
+
+    with c2:
+        st.info(
+            f"📈 FASTEST GROWER\n\n{best_growth['Company']}\n\n{best_growth['CAGR Revenue']:.2f}%"
+        )
+
+    with c3:
+        st.warning(
+            f"🛡️ LOWEST RISK\n\n{lowest_risk['Company']}\n\n{lowest_risk['Debt/Equity']:.2f}"
+        )
+
+    st.markdown("---")
+
+    st.subheader("🏆 Ranking")
+
+    ranking = score_df.sort_values(
+        by="Corporate Score",
+        ascending=False
     )
 
-    st.subheader("Revenue Trend")
+    medals = ["🥇", "🥈", "🥉"]
+
+    for i in range(min(3, len(ranking))):
+        st.write(
+            f"{medals[i]} {ranking.iloc[i]['Company']} ({ranking.iloc[i]['Corporate Score']:.2f})"
+        )
+
+
+    st.subheader("📊 Corporate Score Ranking")
+
+    fig_ranking = px.bar(
+        ranking,
+        x="Company",
+        y="Corporate Score",
+        title="Corporate Score Ranking"
+    )
+
+    fig_ranking.update_layout(
+        height=500
+    )
+
+    st.plotly_chart(
+        fig_ranking,
+        use_container_width=True
+    )
+
+    st.subheader("📈 Revenue Trend")
 
     selected_company = st.selectbox(
         "Choose a company",
-        ["LVMH", "Bollore", "AirLiquide"]
+        score_df["Company"].tolist()
     )
 
-    image_path = f"outputs/{selected_company}_revenue.png"
+    financial_df = pd.read_excel(
+        "data/financial_data.xlsx",
+        sheet_name="Income_Statement"
+    )
 
-    try:
-        st.image(
-            image_path,
-            width="stretch"
-        )
-    except Exception:
-        st.warning(
-            f"Graph not found: {image_path}"
-        )
+    company_df = financial_df[
+        financial_df["Company"] == selected_company
+    ].sort_values("Year")
+
+    fig = px.line(
+        company_df,
+        x="Year",
+        y="Revenue",
+        markers=True,
+        title=f"Revenue Evolution - {selected_company}"
+    )
+
+    fig.update_layout(height=500)
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True
+    )
+
+# ============================================================
+# Document Intelligence
+# ============================================================
+elif page == "Document Intelligence":
+
+    st.title("📂 Document Intelligence")
+
+    uploaded_file = st.file_uploader(
+        "Upload Financial File",
+        type=["xlsx", "xls", "pdf"]
+    )
+
+    if uploaded_file:
+
+        import os
+
+        os.makedirs("uploads", exist_ok=True)
+
+        temp_path = f"uploads/{uploaded_file.name}"
+
+        with open(temp_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
+        if uploaded_file.name.lower().endswith(".pdf"):
+
+            from src.document_intelligence.pdf_parser import PDFParser
+
+            parser = PDFParser(temp_path)
+
+            st.success("PDF successfully analyzed")
+
+            c1, c2 = st.columns(2)
+
+            c1.metric(
+                "Pages",
+                parser.get_page_count()
+            )
+
+            keywords = parser.financial_keywords()
+
+            detected = sum(
+                1 for value in keywords.values()
+                if value
+            )
+
+            c2.metric(
+                "Financial Keywords",
+                detected
+            )
+
+            st.subheader("Detected Keywords")
+
+            st.json(keywords)
+
+            # ==========================
+            # Financial Extractor
+            # ==========================
+
+            from src.document_intelligence.financial_extractor import (
+                FinancialExtractor
+            )
+
+            from src.ai_auditor.financial_reader import (
+                FinancialReader
+            )
+
+            from src.ai_auditor.financial_validator import (
+                FinancialValidator
+            )
+
+            from src.ai_auditor.confidence_engine import (
+                ConfidenceEngine
+            )
+
+            from src.ai_auditor.table_financial_extractor import (
+                TableFinancialExtractor
+            )
+
+            text = parser.extract_text()
+
+            import re
+
+            match = re.search(
+                r"Consolidated Financial Statements\s+(\d+)",
+                text,
+                re.IGNORECASE
+            )
+
+            if match:
+
+                page_ref = int(match.group(1))
+
+                start_page = max(
+                    page_ref - 5,
+                    0
+                )
+
+                text = parser.extract_page_range(
+                start_page=max(page_ref - 1, 0),
+                end_page=page_ref + 10
+                )
+
+            else:
+
+                text = parser.extract_first_pages_text(
+                    pages=30
+                )
+
+            lines = text.split("\n")
+            financial_start = 0
+
+            for i, line in enumerate(lines):
+                lower_line = line.lower()
+
+                if (
+                    "financial statements" in lower_line
+                    or "consolidated financial statements" in lower_line
+                    or "income statement" in lower_line
+                    or "balance sheet" in lower_line
+                ):
+                    financial_start = i
+                    break
+
+            text = "\n".join(lines[financial_start:])
+
+
+            st.subheader(
+                "Financial Text Sample"
+            )
+
+            st.text_area(
+                "Financial Content Preview",
+                text[:10000],
+                height=400
+            )
+
+            extractor = FinancialExtractor(
+                text
+            )
+
+            metrics = extractor.extract_metrics()
+
+            tables = parser.extract_tables()
+
+            table_extractor = TableFinancialExtractor()
+
+            table_metrics = table_extractor.extract(
+                tables
+            )
+
+            st.subheader("Raw Table Metrics Debug")
+            st.json(table_metrics)
+
+            st.subheader(
+                "Table Extraction"
+            )
+
+            st.json(
+                table_metrics
+            )
+
+            metrics = reconcile_metrics(
+                metrics,
+                table_metrics
+            )
+
+            st.subheader(
+                "Extracted Financial Metrics"
+            )
+
+            reader = FinancialReader()
+
+            summary = reader.read(
+                metrics
+            )
+
+            validator = FinancialValidator()
+
+            validation = validator.validate(
+                metrics
+            )
+
+            # Secondary reconciliation using validator result
+            balance_difference = validation.get(
+                "balance_sheet_difference"
+            )
+
+            if (
+                balance_difference is not None
+                and balance_difference > 1000
+            ):
+
+                for year in list(metrics.get("assets", {}).keys()):
+
+                    try:
+                        ta = table_metrics.get("assets", {}).get(year)
+                        te = table_metrics.get("equity", {}).get(year)
+                        tl = table_metrics.get("liabilities", {}).get(year)
+
+                        if (
+                            ta is not None
+                            and te is not None
+                            and tl is not None
+                        ):
+                            # Only replace if table values themselves balance
+                            candidate_diff = abs(float(ta) - (float(te) + float(tl)))
+
+                            if candidate_diff < 100:
+                                metrics["assets"][year] = float(ta)
+                                metrics["equity"][year] = float(te)
+                                metrics["liabilities"][year] = float(tl)
+
+                    except Exception:
+                        pass
+
+                validation = validator.validate(metrics)
+
+            # Show metrics AFTER reconciliation
+            st.json(metrics)
+
+            # Debug balance-sheet values
+            for year in metrics.get("assets", {}):
+                try:
+                    a = metrics.get("assets", {}).get(year)
+                    e = metrics.get("equity", {}).get(year)
+                    l = metrics.get("liabilities", {}).get(year)
+
+                    st.caption(
+                        f"DEBUG {year}: Assets={a} | Equity={e} | Liabilities={l} | Equity+Liabilities={float(e)+float(l) if e is not None and l is not None else 'N/A'}"
+                    )
+                except Exception:
+                    pass
+
+            confidence_engine = ConfidenceEngine()
+
+            confidence = confidence_engine.calculate(
+                metrics
+            )
+
+            def latest_metric_value(metric_dict):
+
+                if not isinstance(metric_dict, dict):
+                    return None
+
+                try:
+                    latest_year = max(metric_dict.keys())
+                    return latest_year, metric_dict[latest_year]
+                except Exception:
+                    return None
+
+            st.subheader(
+                "AI Financial Reader"
+            )
+
+            revenue_data = latest_metric_value(metrics.get("revenue"))
+            assets_data = latest_metric_value(metrics.get("assets"))
+            equity_data = latest_metric_value(metrics.get("equity"))
+            liabilities_data = latest_metric_value(metrics.get("liabilities"))
+
+            if revenue_data:
+                st.markdown(
+                    f"**Revenue ({revenue_data[0]})**: {revenue_data[1]:,.1f}"
+                )
+
+            if assets_data:
+                st.markdown(
+                    f"**Assets ({assets_data[0]})**: {assets_data[1]:,.1f}"
+                )
+
+            if equity_data:
+                st.markdown(
+                    f"**Equity ({equity_data[0]})**: {equity_data[1]:,.1f}"
+                )
+
+            if liabilities_data:
+                st.markdown(
+                    f"**Liabilities ({liabilities_data[0]})**: {liabilities_data[1]:,.1f}"
+                )
+
+            # Additional reconciliation feedback
+            if validation.get("valid"):
+                st.success("Financial metrics reconciled successfully")
+            else:
+                st.warning("Metrics extracted but balance sheet is still inconsistent. Review equity/liability mapping.")
+
+            st.subheader(
+                "Validation Report"
+            )
+
+            st.json(
+                validation
+            )
+
+            st.subheader(
+                "Balance Sheet Validation"
+            )
+
+            balance_difference = validation.get(
+                "balance_sheet_difference"
+            )
+
+            if balance_difference is not None:
+
+                if balance_difference < 100:
+
+                    st.success(
+                        f"Balance Sheet Validated ✅ (difference: {balance_difference:.2f})"
+                    )
+
+                else:
+
+                    st.error(
+                        f"Balance Sheet Mismatch ❌ (difference: {balance_difference:.2f})"
+                    )
+
+            else:
+
+                st.info(
+                    "Insufficient data to validate Assets = Equity + Liabilities"
+                )
+
+            st.subheader(
+                "Confidence Scores"
+            )
+
+            st.json(
+                confidence
+            )
+
+            clean_metrics = {}
+
+            for key, value in metrics.items():
+
+                if value:
+
+                    clean_metrics[key] = value
+
+            if clean_metrics:
+
+                st.subheader(
+                    "Financial Dashboard"
+                )
+
+
+                m1, m2, m3, m4 = st.columns(4)
+
+                revenue_data = latest_metric_value(metrics.get("revenue"))
+                assets_data = latest_metric_value(metrics.get("assets"))
+                equity_data = latest_metric_value(metrics.get("equity"))
+
+                m1.metric(
+                    "Revenue",
+                    f"{revenue_data[1]:,.1f}" if revenue_data else "N/A"
+                )
+
+                m2.metric(
+                    "Assets",
+                    f"{assets_data[1]:,.1f}" if assets_data else "N/A"
+                )
+
+                m3.metric(
+                    "Equity",
+                    f"{equity_data[1]:,.1f}" if equity_data else "N/A"
+                )
+
+                liabilities_data = latest_metric_value(metrics.get("liabilities"))
+
+                m4.metric(
+                    "Liabilities",
+                    f"{liabilities_data[1]:,.1f}" if liabilities_data else "N/A"
+                )
+
+                if assets_data and equity_data and assets_data[1] > 0:
+
+                    st.subheader(
+                        "Financial Ratios"
+                    )
+
+                    equity_ratio = round(
+                        (equity_data[1] / assets_data[1]) * 100,
+                        2
+                    )
+
+                    liabilities_data = latest_metric_value(metrics.get("liabilities"))
+
+                    debt_ratio = None
+
+                    if liabilities_data:
+                        debt_ratio = round(
+                            liabilities_data[1] / assets_data[1] * 100,
+                            2
+                        )
+
+                    # Prevent impossible ratios caused by bad mappings
+                    if equity_ratio > 100:
+                        st.error(
+                            "Detected balance-sheet inconsistency: Equity exceeds Assets. Table mapping should be reviewed."
+                        )
+
+                    r1, r2, r3, r4 = st.columns(4)
+
+                    r1.metric(
+                        "Assets",
+                        f"{assets_data[1]:,.1f}"
+                    )
+
+                    r2.metric(
+                        "Equity Ratio %",
+                        equity_ratio
+                    )
+
+                    r3.metric(
+                        "Debt Ratio %",
+                        debt_ratio if debt_ratio is not None else "N/A"
+                    )
+
+                    r4.metric(
+                        "Balance Sheet Check",
+                        "PASS" if validation.get("valid") else "FAIL"
+                    )
+
+            non_empty_metrics = {
+                k: v
+                for k, v in metrics.items()
+                if v not in [None, "", " ", ",", ", "]
+            }
+
+            if non_empty_metrics:
+                st.success(
+                    f"{len(non_empty_metrics)} financial metrics extracted"
+                )
+            else:
+                st.warning(
+                    "No reliable financial metrics found in the extracted text. Financial statements pages should be targeted next."
+                )
+
+            from src.document_intelligence.statement_detector import (
+                StatementDetector
+            )
+
+            detector = StatementDetector(
+                text
+            )
+
+            statements = detector.detect()
+
+            st.subheader(
+                "Detected Financial Statements"
+            )
+
+            st.json(statements)
+
+            st.subheader(
+                "Financial Statement Detection"
+            )
+
+            import re
+
+            statement_pages = {}
+
+            patterns = {
+                "Consolidated Financial Statements":
+                    r"Consolidated Financial Statements\s+(\d+)",
+
+                "Income Statement":
+                    r"Income Statement\s+(\d+)",
+
+                "Balance Sheet":
+                    r"Balance Sheet\s+(\d+)",
+
+                "Cash Flow Statement":
+                    r"Cash Flow.*?(\d+)"
+            }
+
+            for name, pattern in patterns.items():
+
+                match = re.search(
+                    pattern,
+                    parser.extract_text(),
+                    re.IGNORECASE
+                )
+
+                if match:
+
+                    statement_pages[name] = int(
+                        match.group(1)
+                    )
+
+            if statement_pages:
+
+                st.success(
+                    "Financial statement pages detected"
+                )
+
+                st.json(
+                    statement_pages
+                )
+
+            # ==========================
+            # PDF Intelligence Summary
+            # ==========================
+
+            # Reuse tables already extracted above
+
+            valid_tables = []
+
+            for table in tables:
+                if table and len(table) > 1:
+                    valid_tables.append(table)
+
+            st.subheader(
+                "Document Intelligence Summary"
+            )
+
+            col_a, col_b = st.columns(2)
+
+            col_a.metric(
+                "Tables Detected",
+                len(tables)
+            )
+
+            col_b.metric(
+                "Text Length",
+                len(text)
+            )
+
+            col_c, col_d = st.columns(2)
+
+            col_c.metric(
+                "Valid Tables",
+                len(valid_tables)
+            )
+
+            col_d.metric(
+                "Detected Statements",
+                sum(statements.values())
+            )
+
+            st.subheader(
+                "Text Preview"
+            )
+
+            st.text_area(
+                "First Extracted Characters",
+                text[:5000],
+                height=300
+            )
+
+            if valid_tables:
+
+                st.subheader(
+                    "First Valid Financial Table"
+                )
+
+                try:
+                    import pandas as pd
+
+                    # New scoring-based selection logic
+                    best_score = -1
+                    best_table = None
+
+                    for table in valid_tables:
+
+                        flat_text = " ".join(
+                            str(cell)
+                            for row in table
+                            for cell in row
+                            if cell
+                        ).lower()
+
+                        score = 0
+
+                        financial_keywords = [
+                            "assets",
+                            "liabilities",
+                            "equity",
+                            "shareholders",
+                            "current assets",
+                            "non-current assets",
+                            "total assets",
+                            "total liabilities",
+                            "revenue",
+                            "income",
+                            "cash flow",
+                            "profit",
+                            "borrowings",
+                            "trade receivables",
+                            "trade payables"
+                        ]
+
+                        for keyword in financial_keywords:
+                            if keyword in flat_text:
+                                score += 1
+
+                        if score > best_score:
+                            best_score = score
+                            best_table = table
+
+                    financial_table = best_table
+
+                    st.metric(
+                        "Selected Table Score",
+                        best_score
+                    )
+
+                    if best_score < 3:
+                        st.error(
+                            "Low confidence table selection."
+                        )
+                    elif best_score < 7:
+                        st.warning(
+                            "Medium confidence table selection."
+                        )
+                    else:
+                        st.success(
+                            "High confidence financial table."
+                        )
+
+                    if financial_table is None:
+                        st.warning(
+                            "No reliable financial table identified."
+                        )
+
+                    st.caption(
+                        f"Financial table selected from {len(valid_tables)} candidate tables"
+                    )
+
+                    table_df = pd.DataFrame(financial_table)
+
+                    st.dataframe(
+                        table_df,
+                        use_container_width=True
+                    )
+
+                except Exception as e:
+                    st.warning(
+                        f"Unable to display table: {e}"
+                    )
+            else:
+                st.info(
+                    "No structured financial table could be extracted from the PDF."
+                )
+
+        else:
+
+            from src.document_intelligence.ingestion_pipeline import (
+                IngestionPipeline
+            )
+
+            pipeline = IngestionPipeline(
+                temp_path
+            )
+
+            results = pipeline.run()
+
+            st.success(
+                "Excel successfully analyzed"
+            )
+
+            c1, c2, c3 = st.columns(3)
+
+            c1.metric(
+                "Sheets",
+                results["sheet_count"]
+            )
+
+            c2.metric(
+                "Companies",
+                len(results["companies"])
+            )
+
+            c3.metric(
+                "Years",
+                len(results["years"])
+            )
+
+            st.json(results)
+
+# ============================================================
+# Company Profile
+# ============================================================
+
+elif page == "Company Profile":
+
+    st.title("🏢 Company Profile")
+
+    company = st.selectbox(
+        "Select Company",
+        score_df["Company"].tolist()
+    )
+
+    row = score_df[
+        score_df["Company"] == company
+    ].iloc[0]
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+
+    c1.metric("ROE", f"{row['ROE']}%")
+    c2.metric("Net Margin", f"{row['Net Margin']}%")
+    c3.metric("Debt/Equity", round(row["Debt/Equity"], 2))
+    c4.metric("CAGR Revenue", f"{row['CAGR Revenue']}%")
+    c5.metric("Corporate Score", round(row["Corporate Score"], 2))
+
+    st.markdown("---")
 
 # ============================================================
 # Ownership Analysis
@@ -99,7 +969,7 @@ elif page == "Ownership Analysis":
 
     st.dataframe(
         ownership_df,
-        width="stretch"
+        use_container_width=True
     )
 
 # ============================================================
@@ -110,10 +980,13 @@ elif page == "Ownership Graph":
 
     st.title("🕸️ Ownership Graph")
 
-    st.image(
-        "outputs/ownership_graph.png",
-        width="stretch"
-    )
+    try:
+        st.image(
+            "outputs/ownership_graph.png",
+            use_container_width=True
+        )
+    except Exception as e:
+        st.error(f"Unable to load ownership graph: {e}")
 
 # ============================================================
 # UBO Search
@@ -181,6 +1054,44 @@ elif page == "UBO Search":
                     st.write("⬇️")
 
 # ============================================================
+# Risk Engine
+# ============================================================
+
+elif page == "Risk Engine":
+
+    st.title("⚡ Risk Engine")
+
+    company = st.selectbox(
+        "Select Company",
+        score_df["Company"].tolist()
+    )
+
+    row = score_df[
+        score_df["Company"] == company
+    ].iloc[0]
+
+    risk_score = 0
+
+    if row["Debt/Equity"] > 1:
+        risk_score += 30
+
+    if row["ROE"] < 10:
+        risk_score += 20
+
+    if row["Net Margin"] < 5:
+        risk_score += 20
+
+    st.metric("Global Risk Score", risk_score)
+    st.progress(min(risk_score, 100) / 100)
+
+    if risk_score <= 40:
+        st.success("🟢 LOW RISK")
+    elif risk_score <= 70:
+        st.warning("🟡 MEDIUM RISK")
+    else:
+        st.error("🔴 HIGH RISK")
+
+# ============================================================
 # Risk Scanner
 # ============================================================
 
@@ -221,3 +1132,106 @@ elif page == "Risk Scanner":
 
         for risk in risks:
             st.warning(risk)
+
+# ============================================================
+# Analyst Conclusion
+# ============================================================
+
+elif page == "Analyst Conclusion":
+
+    st.title("🧠 Analyst Conclusion")
+
+    company = st.selectbox(
+        "Select Company",
+        score_df["Company"].tolist()
+    )
+
+    row = score_df[
+        score_df["Company"] == company
+    ].iloc[0]
+
+    summary = []
+
+    if row["ROE"] > 20:
+        summary.append("Strong profitability")
+
+    if row["Debt/Equity"] < 0.7:
+        summary.append("Healthy balance sheet")
+
+    if row["CAGR Revenue"] > 8:
+        summary.append("Strong growth")
+
+    st.info("Executive View: " + ", ".join(summary) if summary else "Executive View: Mixed profile")
+
+    st.subheader("💪 Strengths")
+
+    if row["ROE"] > 20:
+        st.success("Excellent profitability")
+
+    if row["Debt/Equity"] < 0.7:
+        st.success("Low leverage")
+
+    st.subheader("⚠️ Weaknesses")
+
+    if row["ROE"] <= 20:
+        st.warning("Moderate profitability")
+
+    st.subheader("🚨 Risks")
+
+    if row["Debt/Equity"] >= 0.7:
+        st.error("Debt exposure")
+
+    st.subheader("🚀 Opportunities")
+
+    if row["CAGR Revenue"] > 8:
+        st.info("Strong growth profile")
+
+# ============================================================
+# Analyst Report
+# ============================================================
+
+elif page == "Analyst Report":
+
+    st.title("📄 Analyst Report")
+
+    report_text = score_df.to_csv(index=False)
+
+    st.download_button(
+        label="📥 Export Due Diligence Data",
+        data=report_text,
+        file_name="due_diligence_report.csv",
+        mime="text/csv"
+    )
+
+    ranking = score_df.sort_values(
+        by="Corporate Score",
+        ascending=False
+    )
+
+    for _, row in ranking.iterrows():
+
+        st.markdown("---")
+
+        st.subheader(row["Company"])
+
+        st.write(f"ROE : {row['ROE']}%")
+        st.write(f"Net Margin : {row['Net Margin']}%")
+        st.write(f"Debt/Equity : {row['Debt/Equity']}")
+        st.write(f"CAGR Revenue : {row['CAGR Revenue']}%")
+
+        if row["ROE"] > 20:
+            st.success("Excellent profitability")
+        else:
+            st.info("Good profitability")
+
+        if row["CAGR Revenue"] > 8:
+            st.success("Strong growth profile")
+        else:
+            st.info("Stable growth profile")
+
+        if row["Debt/Equity"] < 0.7:
+            st.success("Low financial risk")
+        else:
+            st.warning("Moderate financial risk")
+
+        # Corporate Score metric block removed as now shown in main metrics above
